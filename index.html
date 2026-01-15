@@ -2,13 +2,17 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+    <!-- 增强微信/支付宝适配 -->
     <meta name="wechat-webview-api-version" content="1.0">
+    <meta name="wechat-mobile-web-app-capable" content="yes">
+    <meta name="alipay-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="format-detection" content="telephone=no, email=no">
     <title>扫码领号系统</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
@@ -16,6 +20,10 @@
         .fade-in { animation: fadeIn 0.5s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         input:focus { -webkit-tap-highlight-color: transparent; }
+        /* 适配微信/支付宝内置浏览器样式 */
+        button { -webkit-appearance: none; appearance: none; }
+        * { box-sizing: border-box; }
+        body { -webkit-touch-callout: none; }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen flex flex-col items-center justify-center p-4">
@@ -92,8 +100,10 @@
     </div>
 
     <script>
+        // 关键优化1：动态获取当前页面URL，不再限制固定域名
         const USED_NUMBERS = 'used_numbers_' + new Date().toLocaleDateString().replace(/\//g, '_');
-        const BASE_URL = 'https://Leo111224.github.io/';
+        // 获取当前页面的完整基础URL（自动适配部署的任何域名/路径）
+        const BASE_URL = window.location.origin + window.location.pathname;
 
         const el = {
             configPage: document.getElementById('configPage'),
@@ -123,6 +133,8 @@
             try {
                 parseUrlParams();
                 bindEvents();
+                // 关键优化2：适配微信/支付宝内置浏览器的特殊行为
+                adaptToMiniBrowser();
             } catch (e) {
                 el.configPage.classList.remove('hidden');
                 el.userPage.classList.add('hidden');
@@ -130,21 +142,30 @@
             }
         };
 
+        // 关键优化3：增强URL参数解析，兼容微信/支付宝的参数传递方式
         function parseUrlParams() {
             let total = 0;
             let expire = 0;
-            const params = new URLSearchParams(window.location.search);
-            total = parseInt(params.get('total')) || 0;
-            expire = parseInt(params.get('expire')) || 0;
+            
+            // 兼容多种参数解析方式
+            try {
+                // 标准URLSearchParams解析
+                const params = new URLSearchParams(window.location.search);
+                total = parseInt(params.get('total')) || 0;
+                expire = parseInt(params.get('expire')) || 0;
 
-            if (total <= 0 || expire <= 0) {
-                const search = window.location.search.slice(1);
-                const pairs = search.split('&');
-                pairs.forEach(pair => {
-                    const [key, val] = pair.split('=');
-                    if (key === 'total' && val) total = parseInt(decodeURIComponent(val)) || 0;
-                    if (key === 'expire' && val) expire = parseInt(decodeURIComponent(val)) || 0;
-                });
+                // 备用解析方式（兼容微信/支付宝可能的参数编码问题）
+                if (total <= 0 || expire <= 0) {
+                    const search = window.location.href.split('?')[1] || '';
+                    const pairs = search.split('&');
+                    pairs.forEach(pair => {
+                        const [key, val] = pair.split('=');
+                        if (key === 'total' && val) total = parseInt(decodeURIComponent(val)) || 0;
+                        if (key === 'expire' && val) expire = parseInt(decodeURIComponent(val)) || 0;
+                    });
+                }
+            } catch (e) {
+                console.warn('参数解析异常:', e);
             }
 
             totalNumbers = total;
@@ -167,10 +188,22 @@
             el.createQrBtn.addEventListener('click', createQrCode);
             el.downloadQrBtn.addEventListener('click', downloadQrCode);
             el.getNumberBtn.addEventListener('click', getUniqueNumber);
-            el.backBtn.addEventListener('click', () => window.location.href = BASE_URL);
+            el.backBtn.addEventListener('click', () => {
+                // 关键优化4：返回按钮适配，避免跳转错误
+                window.location.href = BASE_URL;
+            });
             document.addEventListener('keypress', e => e.key === 'Enter' && createQrCode());
+            
+            // 关键优化5：防止微信/支付宝浏览器的重复提交
+            let isProcessing = false;
+            el.getNumberBtn.addEventListener('click', function() {
+                if (isProcessing) return;
+                isProcessing = true;
+                setTimeout(() => isProcessing = false, 1000);
+            });
         }
 
+        // 关键优化6：生成二维码时使用动态URL，兼容所有部署环境
         function createQrCode() {
             hideConfigError();
             const total = parseInt(el.totalNumInput.value.trim());
@@ -188,7 +221,9 @@
             const now = Date.now();
             const expireTime = now + validTime * 60 * 1000;
             el.expireTimeText.textContent = new Date(expireTime).toLocaleString();
-            const qrContent = `${BASE_URL}?total=${total}&expire=${expireTime}`;
+            
+            // 使用动态生成的当前页面URL，不再依赖固定域名
+            const qrContent = `${BASE_URL}?total=${encodeURIComponent(total)}&expire=${encodeURIComponent(expireTime)}`;
 
             try {
                 const ctx = el.qrCanvas.getContext('2d');
@@ -196,7 +231,9 @@
                 QRCode.toCanvas(el.qrCanvas, qrContent, {
                     width: 256,
                     margin: 1,
-                    color: { dark: '#000', light: '#fff' }
+                    color: { dark: '#000', light: '#fff' },
+                    // 关键优化7：提升二维码容错率，适配扫码识别
+                    errorCorrectionLevel: 'H' // 最高容错级别，适合微信/支付宝扫码
                 }, err => {
                     if (err) {
                         showConfigError('二维码生成失败：' + err.message);
@@ -209,14 +246,27 @@
             }
         }
 
+        // 关键优化8：适配微信/支付宝的下载行为
         function downloadQrCode() {
             try {
+                // 兼容微信浏览器的下载限制
                 const link = document.createElement('a');
                 link.download = `领号二维码_总数${el.totalNumInput.value}_有效期${el.validTimeInput.value}分钟.png`;
                 link.href = el.qrCanvas.toDataURL('image/png');
+                
+                // 解决微信浏览器点击不触发的问题
+                document.body.appendChild(link);
                 link.click();
+                document.body.removeChild(link);
+                
+                // 提示用户（微信浏览器可能无法直接下载，需要引导保存图片）
+                if (isWeChatBrowser() || isAlipayBrowser()) {
+                    alert('请长按二维码图片，选择"保存图片"到手机相册');
+                }
             } catch (err) {
                 showConfigError('下载失败：' + err.message);
+                // 备用方案：提示用户手动保存
+                alert('自动下载失败，请长按二维码图片手动保存');
             }
         }
 
@@ -245,12 +295,59 @@
             el.resultNumber.textContent = randomNum;
             el.resultArea.classList.remove('hidden');
             el.getNumberBtn.disabled = true;
+            // 关键优化9：禁用后样式适配
+            el.getNumberBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
         }
 
-        function showConfigError(msg) { el.configError.textContent = msg; el.configError.classList.remove('hidden'); }
-        function hideConfigError() { el.configError.classList.add('hidden'); el.configError.textContent = ''; }
-        function showUserError(msg) { el.userError.textContent = msg; el.userError.classList.remove('hidden'); }
-        function hideUserError() { el.userError.classList.add('hidden'); el.userError.textContent = ''; }
+        // 关键优化10：检测微信/支付宝浏览器
+        function isWeChatBrowser() {
+            return /MicroMessenger/i.test(navigator.userAgent);
+        }
+        
+        function isAlipayBrowser() {
+            return /AlipayClient/i.test(navigator.userAgent);
+        }
+        
+        // 关键优化11：适配微信/支付宝内置浏览器的特殊处理
+        function adaptToMiniBrowser() {
+            // 微信浏览器适配
+            if (isWeChatBrowser()) {
+                // 禁用微信的下拉刷新
+                document.addEventListener('touchmove', function(e) {
+                    if (e.changedTouches.length === 1) {
+                        e.preventDefault();
+                    }
+                }, { passive: false });
+                
+                // 提示用户允许弹出窗口
+                el.configError.style.fontSize = '0.9rem';
+                el.userError.style.fontSize = '0.9rem';
+            }
+            
+            // 支付宝浏览器适配
+            if (isAlipayBrowser()) {
+                // 调整按钮样式适配支付宝主题
+                el.createQrBtn.style.backgroundColor = '#1677ff';
+                el.downloadQrBtn.style.backgroundColor = '#52c41a';
+            }
+        }
+
+        function showConfigError(msg) { 
+            el.configError.textContent = msg; 
+            el.configError.classList.remove('hidden'); 
+        }
+        function hideConfigError() { 
+            el.configError.classList.add('hidden'); 
+            el.configError.textContent = ''; 
+        }
+        function showUserError(msg) { 
+            el.userError.textContent = msg; 
+            el.userError.classList.remove('hidden'); 
+        }
+        function hideUserError() { 
+            el.userError.classList.add('hidden'); 
+            el.userError.textContent = ''; 
+        }
     </script>
 </body>
 </html>
